@@ -59,7 +59,6 @@ export function useScore(
     score.value += points
 
     if (affectSpeed) {
-      // Увеличиваем скорость каждые scorePerSpeedUp очков
       const newSpeed = initialSpeed + Math.floor(score.value / scorePerSpeedUp) * speedIncrement
       speed.value = newSpeed
     }

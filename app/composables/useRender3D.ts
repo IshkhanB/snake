@@ -1,6 +1,7 @@
 import { onUnmounted, shallowRef } from 'vue'
 import * as THREE from 'three'
 import type { SnakeSegment, Food, GridConfig, GameState, BonusFood, Obstacle } from '~/types/game'
+import type { Direction } from '~/types/game'
 
 /** Предустановленные виды камеры */
 export type CameraView = 'isometric' | 'top' | 'side' | 'follow'
@@ -40,6 +41,24 @@ export function useRender3D(
 
   const bonusMeshes: Map<BonusFood, { mesh: THREE.Mesh; ring: THREE.Mesh }> = new Map()
   const obstacleMeshes: Map<Obstacle, THREE.Mesh> = new Map()
+
+  // --- Enemy snake rendering ---
+  type EnemyBodySegment = { sphere: THREE.Mesh; connector: THREE.Mesh }
+  const enemyBodySegments: EnemyBodySegment[] = []
+  const enemyBodyPool: EnemyBodySegment[] = []
+  let enemyGroup: THREE.Group | null = null
+  let enemyHeadGroup: THREE.Group | null = null
+  let enemyHeadSphere: THREE.Mesh | null = null
+  let enemyEyeLeft: THREE.Mesh | null = null
+  let enemyEyeRight: THREE.Mesh | null = null
+  let enemyPupilLeft: THREE.Mesh | null = null
+  let enemyPupilRight: THREE.Mesh | null = null
+  let enemyBodyMatEven: THREE.MeshStandardMaterial | null = null
+  let enemyBodyMatOdd: THREE.MeshStandardMaterial | null = null
+  let enemyConnectorMat: THREE.MeshStandardMaterial | null = null
+  let enemyHeadMat: THREE.MeshStandardMaterial | null = null
+  let enemyLastLookDirX = -1
+  let enemyLastLookDirZ = 0
 
   let renderRafId = 0
   const isRendering = shallowRef(false)
@@ -83,6 +102,10 @@ export function useRender3D(
     bonusFood: 0xffd700,
     bonusTimer: 0xff6b6b,
     obstacle: 0x8b4513,
+    enemyHead: 0x00ff88,
+    enemyBodyEven: 0x00aa55,
+    enemyBodyOdd: 0x008844,
+    enemyConnector: 0x006633,
   }
 
   /**
@@ -193,6 +216,30 @@ export function useRender3D(
       metalness: 0.2,
     })
 
+    // Enemy materials
+    enemyHeadMat = new THREE.MeshStandardMaterial({
+      color: COLORS.enemyHead,
+      emissive: COLORS.enemyHead,
+      emissiveIntensity: 0.35,
+      roughness: 0.35,
+      metalness: 0.2,
+    })
+    enemyBodyMatEven = new THREE.MeshStandardMaterial({
+      color: COLORS.enemyBodyEven,
+      roughness: 0.5,
+      metalness: 0.15,
+    })
+    enemyBodyMatOdd = new THREE.MeshStandardMaterial({
+      color: COLORS.enemyBodyOdd,
+      roughness: 0.5,
+      metalness: 0.15,
+    })
+    enemyConnectorMat = new THREE.MeshStandardMaterial({
+      color: COLORS.enemyConnector,
+      roughness: 0.6,
+      metalness: 0.1,
+    })
+
     buildFloor(cols, rows)
     buildLights(cols, rows)
 
@@ -229,6 +276,33 @@ export function useRender3D(
     scene.add(foodMesh)
     foodLight = new THREE.PointLight(COLORS.food, 1.5, 6, 2)
     scene.add(foodLight)
+
+    // Enemy snake group
+    enemyGroup = new THREE.Group()
+    scene.add(enemyGroup)
+
+    enemyHeadGroup = new THREE.Group()
+    enemyHeadSphere = new THREE.Mesh(headSphereGeo, enemyHeadMat)
+    enemyHeadSphere.castShadow = true
+    enemyHeadGroup.add(enemyHeadSphere)
+
+    enemyEyeLeft = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat)
+    enemyEyeLeft.position.set(0.25, 0.2, 0.4)
+    enemyHeadGroup.add(enemyEyeLeft)
+
+    enemyEyeRight = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat)
+    enemyEyeRight.position.set(-0.25, 0.2, 0.4)
+    enemyHeadGroup.add(enemyEyeRight)
+
+    enemyPupilLeft = new THREE.Mesh(pupilGeo, pupilMat)
+    enemyPupilLeft.position.set(0.25, 0.2, 0.5)
+    enemyHeadGroup.add(enemyPupilLeft)
+
+    enemyPupilRight = new THREE.Mesh(pupilGeo, pupilMat)
+    enemyPupilRight.position.set(-0.25, 0.2, 0.5)
+    enemyHeadGroup.add(enemyPupilRight)
+
+    enemyGroup.add(enemyHeadGroup)
 
     window.addEventListener('resize', onResize)
   }
@@ -432,8 +506,9 @@ export function useRender3D(
     obstacles: Obstacle[] = [],
     prevSnake: SnakeSegment[] = [],
     interp: number = 0,
+    enemySnake: SnakeSegment[] = [],
   ) => {
-    if (!renderer || !scene || !camera || !snakeGroup) return
+    if (!renderer || !scene || !camera || !snakeGroup || !enemyGroup) return
 
     const { cols, rows } = grid
     // Функция для получения интерполированной позиции i-го сегмента
@@ -610,6 +685,95 @@ export function useRender3D(
       }
     }
 
+    // --- Вражеская змейка ---
+    const enemyBodyCount = Math.max(0, enemySnake.length - 1)
+    while (enemyBodySegments.length < enemyBodyCount) {
+      if (!bodySphereGeo || !connectorGeo) break
+      let seg = enemyBodyPool.pop()
+      if (!seg) {
+        const sphere = new THREE.Mesh(bodySphereGeo, enemyBodyMatEven!)
+        sphere.castShadow = true
+        sphere.receiveShadow = true
+        const connector = new THREE.Mesh(connectorGeo, enemyConnectorMat!)
+        connector.castShadow = true
+        seg = { sphere, connector }
+      }
+      enemyBodySegments.push(seg)
+      enemyGroup!.add(seg.sphere)
+      enemyGroup!.add(seg.connector)
+    }
+    while (enemyBodySegments.length > enemyBodyCount) {
+      const seg = enemyBodySegments.pop()!
+      enemyGroup!.remove(seg.sphere)
+      enemyGroup!.remove(seg.connector)
+      enemyBodyPool.push(seg)
+    }
+
+    for (let i = 0; i < enemyBodyCount; i++) {
+      const { sphere, connector } = enemyBodySegments[i]!
+      const seg = enemySnake[i + 1]
+      if (!seg) continue
+      const ex = seg.x + 0.5
+      const ez = seg.y + 0.5
+      sphere.position.set(ex, 0.45, ez)
+      sphere.material = i % 2 === 0 ? enemyBodyMatEven! : enemyBodyMatOdd!
+
+      if (i + 1 < enemyBodyCount) {
+        const nextSeg = enemySnake[i + 2]
+        if (!nextSeg) {
+          connector.visible = false
+        } else {
+          const nx = nextSeg.x + 0.5
+          const nz = nextSeg.y + 0.5
+          const dx = nx - ex
+          const dz = nz - ez
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist > 1.5) {
+            connector.visible = false
+          } else {
+            placeConnector(connector, ex, ez, nx, nz)
+            connector.visible = true
+          }
+        }
+      } else {
+        connector.visible = false
+      }
+    }
+
+    // Голова противника
+    if (enemyHeadGroup && enemySnake.length > 0) {
+      const eHead = enemySnake[0]!
+      const eHeadX = eHead.x + 0.5
+      const eHeadZ = eHead.y + 0.5
+      enemyHeadGroup.position.set(eHeadX, 0.55, eHeadZ)
+
+      let eLookDirX = enemyLastLookDirX
+      let eLookDirZ = enemyLastLookDirZ
+      if (enemySnake.length > 1) {
+        const eNeck = enemySnake[1]!
+        let dx = eHeadX - (eNeck.x + 0.5)
+        let dz = eHeadZ - (eNeck.y + 0.5)
+        if (dx > cols / 2) dx -= cols
+        else if (dx < -cols / 2) dx += cols
+        if (dz > rows / 2) dz -= rows
+        else if (dz < -rows / 2) dz += rows
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist > 0.01 && dist < 2) {
+          eLookDirX = dx / dist
+          eLookDirZ = dz / dist
+          enemyLastLookDirX = eLookDirX
+          enemyLastLookDirZ = eLookDirZ
+        }
+      }
+      enemyHeadGroup.rotation.y = Math.atan2(eLookDirX, eLookDirZ)
+      enemyHeadSphere!.position.y = Math.sin(performance.now() * 0.006 + 1) * 0.03
+    } else if (enemyHeadGroup) {
+      enemyHeadGroup.visible = false
+    }
+    if (enemyHeadGroup && enemySnake.length > 0) {
+      enemyHeadGroup.visible = true
+    }
+
     renderer.render(scene, camera)
   }
 
@@ -622,6 +786,7 @@ export function useRender3D(
     getObstacles: () => Obstacle[] = () => [],
     getPrevSnake: () => SnakeSegment[] = () => [],
     getInterpolation: () => number = () => 0,
+    getEnemySnake: () => SnakeSegment[] = () => [],
   ) => {
     if (isRendering.value) return
     isRendering.value = true
@@ -636,6 +801,7 @@ export function useRender3D(
         getObstacles(),
         getPrevSnake(),
         getInterpolation(),
+        getEnemySnake(),
       )
       renderRafId = requestAnimationFrame(frame)
     }
@@ -666,6 +832,17 @@ export function useRender3D(
     bodySegments.length = 0
     bodyPool.length = 0
 
+    for (const seg of enemyBodySegments) {
+      seg.sphere.geometry?.dispose()
+      seg.connector.geometry?.dispose()
+    }
+    for (const seg of enemyBodyPool) {
+      seg.sphere.geometry?.dispose()
+      seg.connector.geometry?.dispose()
+    }
+    enemyBodySegments.length = 0
+    enemyBodyPool.length = 0
+
     for (const { mesh, ring } of bonusMeshes.values()) {
       mesh.geometry?.dispose()
       ring.geometry?.dispose()
@@ -695,6 +872,10 @@ export function useRender3D(
     bonusMat?.dispose()
     ringMat?.dispose()
     obstacleMat?.dispose()
+    enemyHeadMat?.dispose()
+    enemyBodyMatEven?.dispose()
+    enemyBodyMatOdd?.dispose()
+    enemyConnectorMat?.dispose()
 
     if (renderer) {
       renderer.dispose()

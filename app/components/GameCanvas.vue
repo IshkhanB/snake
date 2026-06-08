@@ -22,6 +22,10 @@
       :score="score"
       :high-score="highScore"
       :speed="speed"
+      :boost-energy="boostEnergy"
+      :is-boosting="isBoosting"
+      :enemy-score="enemyScore"
+      :enemy-active="enemyActive"
     >
       <button
         class="camera-toggle-btn"
@@ -38,6 +42,14 @@
       >
         🧱 {{ obstaclesActive ? 'Убрать' : 'Препятствия' }}
       </button>
+      <button
+        class="enemy-toggle-btn"
+        :class="{ 'enemy-toggle-btn--active': enemyActive }"
+        :title="enemyActive ? 'Убрать противника' : 'Добавить AI-противника'"
+        @click="handleEnemyToggle"
+      >
+        🤖 {{ enemyActive ? 'Убрать' : 'Противник' }}
+      </button>
     </GameStats>
   </div>
 </template>
@@ -52,6 +64,8 @@ import { useRender3D } from '~/composables/useRender3D'
 import { useGameLoop } from '~/composables/useGameLoop'
 import { useBonusFood } from '~/composables/useBonusFood'
 import { useObstacles } from '~/composables/useObstacles'
+import { useEnemy } from '~/composables/useEnemy'
+import { useBoost, BOOST_MULTIPLIER } from '~/composables/useBoost'
 import GameStats from './GameStats.vue'
 
 // SSR-safe: рендерим только после маунта на клиенте
@@ -70,6 +84,8 @@ const snake = useSnakeLogic(grid)
 const scoreManager = useScore(options.initialSpeed, options.speedIncrement, options.scorePerSpeedUp)
 const bonusFood = useBonusFood(grid)
 const obstacles = useObstacles(grid)
+const enemy = useEnemy(grid)
+const boost = useBoost()
 
 const gameState = ref<GameState>(GameState.IDLE)
 const isNewRecord = ref(false)
@@ -91,6 +107,8 @@ const handleCameraToggle = () => {
 }
 
 const obstaclesActive = computed(() => obstacles.active.value)
+const enemyActive = computed(() => enemy.active.value)
+const enemyScore = computed(() => enemy.score.value)
 
 const handleObstacleToggle = () => {
   obstacles.toggleRandom([...snake.snake.value], { ...snake.food.value })
@@ -102,12 +120,37 @@ const handleObstacleToggle = () => {
     [...obstacles.obstacles.value],
     [...snake.prevSnake.value],
     0,
+    [...enemy.enemySnake.value],
   )
 }
+
+const handleEnemyToggle = () => {
+  enemy.toggle()
+  renderer.render(
+    gameState.value,
+    [...snake.snake.value],
+    { ...snake.food.value },
+    [...bonusFood.bonusFoods.value],
+    [...obstacles.obstacles.value],
+    [...snake.prevSnake.value],
+    0,
+    [...enemy.enemySnake.value],
+  )
+}
+
+/** Счётчик тиков — нужен, чтобы противник двигался только в "свои" тики,
+ *  а не каждый ускоренный тик игрока. При бусте игровой цикл тикает в 2× чаще,
+ *  поэтому противник должен пропускать каждый второй тик. */
+let tickCounter = 0
 
 const gameLoop = useGameLoop(
   () => {
     if (gameState.value !== GameState.PLAYING) return
+
+    tickCounter++
+
+    // Обновляем энергию ускорения каждый тик
+    boost.updatePerTick()
 
     const ate = snake.move()
     if (ate) {
@@ -121,6 +164,8 @@ const gameLoop = useGameLoop(
       const bonusPoints = bonusFood.checkBonusEat(head.x, head.y)
       if (bonusPoints > 0) {
         scoreManager.addScore(bonusPoints, false)
+        // Бонусный шар полностью заполняет энергию буста
+        boost.refill()
       }
     }
 
@@ -128,21 +173,61 @@ const gameLoop = useGameLoop(
     bonusFood.trySpawnBonus([...snake.snake.value])
     bonusFood.removeExpiredBonuses()
 
-    if (snake.checkCollision([...obstacles.obstacles.value])) {
+    // Двигаем противника, если активен.
+    // При бусте игрока цикл тикает в 2× чаще — противник двигается
+    // только в чётные тики, сохраняя свою обычную скорость.
+    const shouldEnemyMove = !boost.isBoosting.value || tickCounter % 2 === 0
+    if (enemy.active.value && shouldEnemyMove) {
+      const enemyAte = enemy.move(
+        [...snake.snake.value],
+        { ...snake.food.value },
+        [...obstacles.obstacles.value],
+      )
+      if (enemyAte) {
+        snake.spawnFood()
+      }
+      // Проверяем столкновение противника с игроком или препятствиями
+      if (enemy.checkCollision([...snake.snake.value], [...obstacles.obstacles.value])) {
+        // Противник умер — просто убираем его
+        enemy.toggle()
+      }
+    }
+
+    // Проверка столкновения игрока с противником
+    let hitEnemy = false
+    if (enemy.active.value) {
+      const playerHead = snake.snake.value[0]
+      if (playerHead) {
+        for (const seg of enemy.enemySnake.value) {
+          if (seg.x === playerHead.x && seg.y === playerHead.y) {
+            hitEnemy = true
+            break
+          }
+        }
+      }
+    }
+
+    if (hitEnemy || snake.checkCollision([...obstacles.obstacles.value])) {
       gameState.value = GameState.GAME_OVER
       scoreManager.saveHighScore()
       isNewRecord.value = scoreManager.score.value >= scoreManager.highScore.value
+      boost.cancelBoost()
       gameLoop.stop()
       renderer.stopRender()
     }
   },
-  () => scoreManager.speed.value,
+  () => {
+    // Скорость игрока: базовая × множитель буста (если активен)
+    const baseSpeed = scoreManager.speed.value
+    return boost.isBoosting.value ? baseSpeed * BOOST_MULTIPLIER : baseSpeed
+  },
   gameState,
 )
 
 const togglePause = () => {
   if (gameState.value === GameState.PLAYING) {
     gameState.value = GameState.PAUSED
+    boost.cancelBoost()
     gameLoop.stop()
   } else if (gameState.value === GameState.PAUSED) {
     gameState.value = GameState.PLAYING
@@ -155,7 +240,12 @@ const handleStart = () => {
   scoreManager.reset()
   bonusFood.reset()
   obstacles.reset()
+  boost.reset()
+  if (enemy.active.value) {
+    enemy.reset()
+  }
   isNewRecord.value = false
+  tickCounter = 0
   gameState.value = GameState.PLAYING
   gameLoop.start()
   renderer.startRender(
@@ -166,6 +256,7 @@ const handleStart = () => {
     () => [...obstacles.obstacles.value],
     () => [...snake.prevSnake.value],
     () => gameLoop.getInterpolation(),
+    () => [...enemy.enemySnake.value],
   )
 }
 
@@ -184,11 +275,15 @@ useInput(
   handleStart,
   () => renderer.currentView.value === 'follow',
   () => snake.direction.value,
+  boost.startBoost,
+  boost.endBoost,
 )
 
 const score = computed(() => scoreManager.score.value)
 const highScore = computed(() => scoreManager.highScore.value)
 const speed = computed(() => scoreManager.speed.value)
+const boostEnergy = computed(() => boost.energy.value)
+const isBoosting = computed(() => boost.isBoosting.value)
 
 onMounted(async () => {
   // 1. Разрешаем рендеринг шаблона (canvas появится в DOM)
@@ -198,7 +293,7 @@ onMounted(async () => {
   // 3. Теперь canvasRef.value гарантированно не null
   renderer.initCanvas()
   snake.reset()
-  renderer.render(GameState.IDLE, [...snake.snake.value], { ...snake.food.value }, [], [])
+  renderer.render(GameState.IDLE, [...snake.snake.value], { ...snake.food.value }, [], [], [], 0, [])
 })
 
 onUnmounted(() => {
@@ -276,6 +371,31 @@ onUnmounted(() => {
 .obstacle-toggle-btn--active {
   background: rgba(233, 69, 96, 0.85);
   border-color: rgba(233, 69, 96, 0.8);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.enemy-toggle-btn {
+  width: 100%;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 100, 60, 0.85);
+  border: 1px solid rgba(0, 170, 85, 0.6);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.enemy-toggle-btn:hover {
+  background: rgba(0, 170, 85, 0.9);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 170, 85, 0.5);
+}
+
+.enemy-toggle-btn--active {
+  background: rgba(0, 255, 136, 0.25);
+  border-color: rgba(0, 255, 136, 0.8);
   animation: pulse 1.5s ease-in-out infinite;
 }
 

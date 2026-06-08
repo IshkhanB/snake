@@ -19,6 +19,9 @@ export function useSnakeLogic(grid: GridConfig) {
   /** Буфер следующего направления (применяется в начале тика) */
   const nextDirection = shallowRef<Direction>(Dir.RIGHT)
 
+  /** Очередь направлений (максимум 2) — для последовательных поворотов за один тик */
+  const directionQueue: Direction[] = []
+
   /** Еда на поле */
   const food = ref<Food>({ x: 0, y: 0, type: 'normal', points: 1 })
 
@@ -43,6 +46,7 @@ export function useSnakeLogic(grid: GridConfig) {
 
     direction.value = Dir.RIGHT
     nextDirection.value = Dir.RIGHT
+    directionQueue.length = 0
     spawnFood()
   }
 
@@ -77,11 +81,22 @@ export function useSnakeLogic(grid: GridConfig) {
 
   /**
    * Установить новое направление с защитой от разворота на 180°.
-   * Проверяем против nextDirection, чтобы избежать двойного ввода за один тик.
+   * Направления буферизуются в очередь (до 2 штук), чтобы быстрые
+   * последовательные нажатия (например «вверх»→«влево» за один тик)
+   * выполнялись поочерёдно, а не перезаписывали друг друга.
    */
   const setDirection = (newDir: Direction) => {
-    if (OPPOSITE_DIRECTION[newDir] !== nextDirection.value) {
-      nextDirection.value = newDir
+    // Сравниваем с последним буферизованным направлением (или с текущим, если очередь пуста)
+    const lastQueued = directionQueue.length > 0
+      ? directionQueue[directionQueue.length - 1]!
+      : direction.value
+
+    // Защита от разворота на 180° и от дублирования
+    if (OPPOSITE_DIRECTION[newDir] === lastQueued) return
+    if (newDir === lastQueued) return
+
+    if (directionQueue.length < 2) {
+      directionQueue.push(newDir)
     }
   }
 
@@ -97,7 +112,10 @@ export function useSnakeLogic(grid: GridConfig) {
     // Для каждого сегмента запоминаем текущую позицию как "предыдущую"
     prevSnake.value = snake.value.map(s => ({ ...s }))
 
-    // Применяем буферизованное направление
+    // Берём следующее направление из очереди (если есть), иначе оставляем текущее
+    if (directionQueue.length > 0) {
+      nextDirection.value = directionQueue.shift()!
+    }
     direction.value = nextDirection.value
 
     const head = snake.value[0]!

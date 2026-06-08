@@ -49,6 +49,8 @@ const turnDirection = (current: Direction, turn: 'left' | 'right'): Direction =>
  * @param onStartGame — callback для старта игры
  * @param isFollowMode — getter: активен ли режим камеры follow
  * @param getCurrentDirection — getter: текущее направление змейки
+ * @param onBoostStart — callback для начала ускорения (пробел)
+ * @param onBoostEnd — callback для окончания ускорения (пробел)
  */
 export function useInput(
   setDirection: (dir: Direction) => void,
@@ -56,6 +58,8 @@ export function useInput(
   onStartGame: () => void,
   isFollowMode: () => boolean = () => false,
   getCurrentDirection: () => Direction = () => Dir.RIGHT,
+  onBoostStart: () => void = () => {},
+  onBoostEnd: () => void = () => {},
 ) {
   /** Координаты начала свайпа */
   let touchStartX = 0
@@ -94,15 +98,33 @@ export function useInput(
       }
     }
 
-    if (e.key === 'p' || e.key === 'P' || e.key === ' ' || e.key === 'з' || e.key === 'З') {
+    if (e.key === 'p' || e.key === 'P' || e.key === 'з' || e.key === 'З') {
       e.preventDefault()
       onTogglePause()
+      return
+    }
+
+    if (e.key === ' ') {
+      e.preventDefault()
+      if (!e.repeat) {
+        onBoostStart()
+      }
       return
     }
 
     if (e.key === 'Enter') {
       e.preventDefault()
       onStartGame()
+    }
+  }
+
+  /**
+   * Обработчик отпускания клавиш — для сброса ускорения.
+   */
+  const handleKeyUp = (e: KeyboardEvent) => {
+    if (e.key === ' ') {
+      e.preventDefault()
+      onBoostEnd()
     }
   }
 
@@ -155,12 +177,14 @@ export function useInput(
 
   onMounted(() => {
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
     window.addEventListener('touchstart', handleTouchStart, { passive: true })
     window.addEventListener('touchend', handleTouchEnd, { passive: false })
   })
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown)
+    window.removeEventListener('keyup', handleKeyUp)
     window.removeEventListener('touchstart', handleTouchStart)
     window.removeEventListener('touchend', handleTouchEnd)
   })
