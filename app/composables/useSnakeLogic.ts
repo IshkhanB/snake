@@ -30,16 +30,18 @@ export function useSnakeLogic(grid: GridConfig) {
 
   /**
    * Инициализация змейки в центре поля.
+   * @param startLength начальная длина змейки (учитывает улучшения)
    */
-  const reset = () => {
+  const reset = (startLength: number = 3) => {
     const centerX = Math.floor(grid.cols / 2)
     const centerY = Math.floor(grid.rows / 2)
 
-    snake.value = [
-      { x: centerX, y: centerY, id: segmentIdCounter++ },
-      { x: centerX - 1, y: centerY, id: segmentIdCounter++ },
-      { x: centerX - 2, y: centerY, id: segmentIdCounter++ },
-    ]
+    // Создаём змейку заданной длины, хвост уходит влево от головы
+    const segments: SnakeSegment[] = []
+    for (let i = 0; i < startLength; i++) {
+      segments.push({ x: centerX - i, y: centerY, id: segmentIdCounter++ })
+    }
+    snake.value = segments
 
     // prevSnake = текущее состояние на старте (нет интерполяции в первом кадре)
     prevSnake.value = snake.value.map(s => ({ ...s }))

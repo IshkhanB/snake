@@ -6,11 +6,13 @@ const HIGH_SCORE_KEY = 'snake_high_score'
 /**
  * Composable для управления счётом и рекордом.
  * Рекорд сохраняется в localStorage.
+ * @param getScoreMult getter множителя очков (учитывает улучшения)
  */
 export function useScore(
   initialSpeed: number,
   speedIncrement: number,
   scorePerSpeedUp: number,
+  getScoreMult: () => number = () => 1,
 ) {
   /** Текущий счёт */
   const score = shallowRef(0)
@@ -56,7 +58,8 @@ export function useScore(
    * @param affectSpeed если false, скорость не увеличивается (для бонусов)
    */
   const addScore = (points: number, affectSpeed: boolean = true) => {
-    score.value += points
+    const gained = Math.max(1, Math.round(points * getScoreMult()))
+    score.value += gained
 
     if (affectSpeed) {
       const newSpeed = initialSpeed + Math.floor(score.value / scorePerSpeedUp) * speedIncrement

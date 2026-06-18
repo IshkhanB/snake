@@ -23,6 +23,14 @@
           />
         </div>
       </div>
+      <div class="stats__item">
+        <span class="stats__label">🪙 Монеты</span>
+        <span class="stats__value stats__value--coins">{{ coins }}</span>
+      </div>
+      <div v-if="shields > 0" class="stats__item">
+        <span class="stats__label">🛡️ Щиты</span>
+        <span class="stats__value stats__value--shield">{{ shields }}</span>
+      </div>
       <div v-if="enemyActive" class="stats__item">
         <span class="stats__label">🤖 Враг</span>
         <span class="stats__value stats__value--enemy">{{ enemyScore }}</span>
@@ -39,6 +47,8 @@ defineProps<{
   speed: number
   boostEnergy: number
   isBoosting: boolean
+  coins: number
+  shields: number
   enemyScore?: number
   enemyActive?: boolean
 }>()
@@ -105,6 +115,16 @@ defineProps<{
 .stats__value--enemy {
   color: #00ff88;
   text-shadow: 0 0 10px rgba(0, 255, 136, 0.4);
+}
+
+.stats__value--coins {
+  color: #fbbf24;
+  text-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+}
+
+.stats__value--shield {
+  color: #60a5fa;
+  text-shadow: 0 0 10px rgba(96, 165, 250, 0.5);
 }
 
 .stats__boost-bar {

@@ -17,6 +17,13 @@
         @resume="handleResume"
         @restart="handleRestart"
       />
+      <UpgradePanel
+        v-if="showUpgrades"
+        :coins="coins"
+        :levels="upgrades.levels.value"
+        @buy="upgrades.buyUpgrade"
+        @close="toggleUpgrades"
+      />
     </div>
     <GameStats
       :score="score"
@@ -24,9 +31,18 @@
       :speed="speed"
       :boost-energy="boostEnergy"
       :is-boosting="isBoosting"
+      :coins="coins"
+      :shields="shields"
       :enemy-score="enemyScore"
       :enemy-active="enemyActive"
     >
+      <button
+        class="upgrades-toggle-btn"
+        title="Улучшения змейки"
+        @click="toggleUpgrades"
+      >
+        🏪 Улучшения
+      </button>
       <button
         class="camera-toggle-btn"
         :title="`Вид камеры: ${cameraViewLabel}`"
@@ -56,7 +72,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { GameState, DEFAULT_GAME_OPTIONS } from '~/types/game'
+import { GameState, DEFAULT_GAME_OPTIONS, DIRECTION_VECTOR } from '~/types/game'
 import { useSnakeLogic } from '~/composables/useSnakeLogic'
 import { useScore } from '~/composables/useScore'
 import { useInput } from '~/composables/useInput'
@@ -66,7 +82,9 @@ import { useBonusFood } from '~/composables/useBonusFood'
 import { useObstacles } from '~/composables/useObstacles'
 import { useEnemy } from '~/composables/useEnemy'
 import { useBoost, BOOST_MULTIPLIER } from '~/composables/useBoost'
+import { useUpgrades } from '~/composables/useUpgrades'
 import GameStats from './GameStats.vue'
+import UpgradePanel from './UpgradePanel.vue'
 
 // SSR-safe: рендерим только после маунта на клиенте
 const mounted = ref(false)
@@ -80,15 +98,28 @@ const grid = {
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 
+const upgrades = useUpgrades()
+
 const snake = useSnakeLogic(grid)
-const scoreManager = useScore(options.initialSpeed, options.speedIncrement, options.scorePerSpeedUp)
+const scoreManager = useScore(
+  options.initialSpeed,
+  options.speedIncrement,
+  options.scorePerSpeedUp,
+  () => 1 + upgrades.getLevel('scoreMult') * 0.25,
+)
 const bonusFood = useBonusFood(grid)
 const obstacles = useObstacles(grid)
 const enemy = useEnemy(grid)
-const boost = useBoost()
+const boost = useBoost(
+  () => 100 + upgrades.getLevel('boostEnergy') * 20,
+  () => 0.4 + upgrades.getLevel('regen') * 0.15,
+)
 
 const gameState = ref<GameState>(GameState.IDLE)
 const isNewRecord = ref(false)
+
+/** Количество щитов, доступных в текущей игре (на основе улучшения) */
+let shieldsRemaining = 0
 
 const renderer = useRender3D(canvasRef, grid)
 
@@ -208,12 +239,27 @@ const gameLoop = useGameLoop(
     }
 
     if (hitEnemy || snake.checkCollision([...obstacles.obstacles.value])) {
-      gameState.value = GameState.GAME_OVER
-      scoreManager.saveHighScore()
-      isNewRecord.value = scoreManager.score.value >= scoreManager.highScore.value
-      boost.cancelBoost()
-      gameLoop.stop()
-      renderer.stopRender()
+      // Щит спасает от смерти (на основе уровня улучшения)
+      if (shieldsRemaining > 0) {
+        shieldsRemaining--
+        // Отбрасываем змейку на предыдущую позицию головы
+        const playerHead = snake.snake.value[0]
+        if (playerHead && snake.snake.value.length > 1) {
+          const vec = DIRECTION_VECTOR[snake.direction.value]
+          const prevX = ((playerHead.x - vec.x + grid.cols) % grid.cols)
+          const prevY = ((playerHead.y - vec.y + grid.rows) % grid.rows)
+          snake.snake.value[0] = { ...playerHead, x: prevX, y: prevY }
+        }
+      } else {
+        gameState.value = GameState.GAME_OVER
+        scoreManager.saveHighScore()
+        isNewRecord.value = scoreManager.score.value >= scoreManager.highScore.value
+        // Начисляем монеты за игру (1 монета за каждые 5 очков)
+        upgrades.addCoins(Math.floor(scoreManager.score.value / 5))
+        boost.cancelBoost()
+        gameLoop.stop()
+        renderer.stopRender()
+      }
     }
   },
   () => {
@@ -236,7 +282,9 @@ const togglePause = () => {
 }
 
 const handleStart = () => {
-  snake.reset()
+  const startLength = 3 + upgrades.getLevel('length')
+  shieldsRemaining = upgrades.getLevel('shield')
+  snake.reset(startLength)
   scoreManager.reset()
   bonusFood.reset()
   obstacles.reset()
@@ -284,6 +332,17 @@ const highScore = computed(() => scoreManager.highScore.value)
 const speed = computed(() => scoreManager.speed.value)
 const boostEnergy = computed(() => boost.energy.value)
 const isBoosting = computed(() => boost.isBoosting.value)
+const coins = computed(() => upgrades.coins.value)
+const shields = computed(() => shieldsRemaining)
+
+const showUpgrades = ref(false)
+const toggleUpgrades = () => {
+  showUpgrades.value = !showUpgrades.value
+  // Открываем панель только вне активного геймплея (паузим игру)
+  if (showUpgrades.value && gameState.value === GameState.PLAYING) {
+    togglePause()
+  }
+}
 
 onMounted(async () => {
   // 1. Разрешаем рендеринг шаблона (canvas появится в DOM)
@@ -292,7 +351,7 @@ onMounted(async () => {
   await nextTick()
   // 3. Теперь canvasRef.value гарантированно не null
   renderer.initCanvas()
-  snake.reset()
+  snake.reset(3 + upgrades.getLevel('length'))
   renderer.render(GameState.IDLE, [...snake.snake.value], { ...snake.food.value }, [], [], [], 0, [])
 })
 
@@ -323,6 +382,25 @@ onUnmounted(() => {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.upgrades-toggle-btn {
+  width: 100%;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(106, 13, 173, 0.85);
+  border: 1px solid rgba(168, 85, 247, 0.6);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upgrades-toggle-btn:hover {
+  background: rgba(168, 85, 247, 0.9);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.5);
 }
 
 .camera-toggle-btn {

@@ -1,13 +1,7 @@
 import { shallowRef, readonly } from 'vue'
 
-/** Максимальная энергия ускорения */
-const MAX_ENERGY = 100
-
 /** Расход энергии за один игровой тик */
 const DRAIN_PER_TICK = 1.5
-
-/** Восстановление энергии за один игровой тик */
-const REGEN_PER_TICK = 0.4
 
 /** Минимальная энергия для активации буста */
 const MIN_ENERGY_TO_BOOST = 5
@@ -18,23 +12,29 @@ export const BOOST_MULTIPLIER = 2
 /**
  * Composable для управления ускорением змейки игрока.
  * Энергия тратится при удержании пробела и восстанавливается при отпускании.
+ * @param getMaxEnergy getter максимальной энергии (учитывает улучшения)
+ * @param getRegenPerTick getter скорости регенерации (учитывает улучшения)
  */
-export function useBoost() {
+export function useBoost(
+  getMaxEnergy: () => number = () => 100,
+  getRegenPerTick: () => number = () => 0.4,
+) {
   /** Текущая энергия ускорения */
-  const energy = shallowRef(MAX_ENERGY)
+  const energy = shallowRef(getMaxEnergy())
 
   /** Флаг: активно ли ускорение */
   const isBoosting = shallowRef(false)
 
   /** Обновить энергию (вызывается каждый игровой тик) */
   const updatePerTick = () => {
+    const maxEnergy = getMaxEnergy()
     if (isBoosting.value) {
       energy.value = Math.max(0, energy.value - DRAIN_PER_TICK)
       if (energy.value <= 0) {
         isBoosting.value = false
       }
     } else {
-      energy.value = Math.min(MAX_ENERGY, energy.value + REGEN_PER_TICK)
+      energy.value = Math.min(maxEnergy, energy.value + getRegenPerTick())
     }
   }
 
@@ -60,12 +60,12 @@ export function useBoost() {
 
   /** Полностью заполнить энергию буста (например, при сборе бонуса) */
   const refill = () => {
-    energy.value = MAX_ENERGY
+    energy.value = getMaxEnergy()
   }
 
   /** Сбросить энергию для новой игры */
   const reset = () => {
-    energy.value = MAX_ENERGY
+    energy.value = getMaxEnergy()
     isBoosting.value = false
   }
 
